@@ -17,8 +17,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      # auth_client の keyring は libdbus、audio の rodio/cpal は ALSA をコンパイル時に要求する
+      - name: Install system packages
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler pkg-config libdbus-1-dev libasound2-dev
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace -- -D warnings
 
@@ -28,6 +29,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      # app → system_ui → auth_client の keyring は libdbus、audio の rodio/cpal は ALSA を要求する
+      - name: Install system packages
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler pkg-config libdbus-1-dev libasound2-dev
       - run: cargo build -p app
+
+  # render / window / xr / app のテストは GPU デバイスも OpenXR ランタイムも要求しない。
+  # ワークスペース全体を実行する。将来デバイスを要求するテストを足すときは、
+  # そのクレートだけ --exclude し、理由をこのコメントに残す。
+  rust-test:
+    name: "Rust — test workspace"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # auth_client の keyring は libdbus、audio の rodio/cpal は ALSA をコンパイル時に要求する
+      - name: Install system packages
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler pkg-config libdbus-1-dev libasound2-dev
+      - run: cargo test --workspace

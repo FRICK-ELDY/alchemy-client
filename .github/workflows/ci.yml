@@ -29,9 +29,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      # audio の rodio/cpal は ALSA をコンパイル時に要求する
+      # app → system_ui → auth_client の keyring は libdbus、audio の rodio/cpal は ALSA を要求する
       - name: Install system packages
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler pkg-config libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler pkg-config libdbus-1-dev libasound2-dev
       - run: cargo build -p app
 
   # render / window / xr / app のテストは GPU デバイスも OpenXR ランタイムも要求しない。

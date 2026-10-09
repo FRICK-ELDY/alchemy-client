@@ -31,3 +31,16 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - run: cargo build -p app
+
+  # render / window / xr / app のテストは GPU デバイスも OpenXR ランタイムも要求しない。
+  # ワークスペース全体を実行する。将来デバイスを要求するテストを足すときは、
+  # そのクレートだけ --exclude し、理由をこのコメントに残す。
+  rust-test:
+    name: "Rust — test workspace"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - run: cargo test --workspace

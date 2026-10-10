@@ -1,5 +1,7 @@
 //! 1 フレーム分の描画命令。
 //! Elixir（contents）が組み立て、`Content.FrameEncoder` で protobuf 化され、Zenoh の `game/.../frame` 等経由でクライアントの `render` が消費する。
+//!
+//! 位置とワールド寸法は IEEE 754 binary64。色と UV は binary32。GPU へ渡す直前に f32 へ落とす。
 
 use super::MeshVertex;
 
@@ -9,57 +11,57 @@ pub enum DrawCommand {
     /// プレイヤースプライト描画。
     /// `SnapshotInterpolator`（`network_render_bridge`）が補間後に座標を書き換える。
     /// `Sprite` と分離することで、補間対象を型安全に特定できる。
-    PlayerSprite { x: f32, y: f32, frame: u8 },
+    PlayerSprite { x: f64, y: f64, frame: u8 },
     /// パーティクル描画
     Particle {
-        x: f32,
-        y: f32,
+        x: f64,
+        y: f64,
         r: f32,
         g: f32,
         b: f32,
         alpha: f32,
-        size: f32,
+        size: f64,
     },
     /// アイテム描画
-    Item { x: f32, y: f32, kind: u8 },
+    Item { x: f64, y: f64, kind: u8 },
     /// 障害物描画
     Obstacle {
-        x: f32,
-        y: f32,
-        radius: f32,
+        x: f64,
+        y: f64,
+        radius: f64,
         kind: u8,
     },
     /// 3D ボックス描画（R-5）
     Box3D {
-        x: f32,
-        y: f32,
-        z: f32,
-        half_w: f32,
-        half_h: f32,
-        half_d: f32,
+        x: f64,
+        y: f64,
+        z: f64,
+        half_w: f64,
+        half_h: f64,
+        half_d: f64,
         color: [f32; 4],
     },
     /// 3D 球（`MeshDef` 名 `unit_sphere`、半径 0.5 の単位球を `radius` でスケール）
     Sphere3D {
-        x: f32,
-        y: f32,
-        z: f32,
-        radius: f32,
+        x: f64,
+        y: f64,
+        z: f64,
+        radius: f64,
         color: [f32; 4],
     },
     /// 3D 円錐（`MeshDef` 名 `unit_cone`。フィールド意味は `Box3D` と同じ half 拡張）
     Cone3D {
-        x: f32,
-        y: f32,
-        z: f32,
-        half_w: f32,
-        half_h: f32,
-        half_d: f32,
+        x: f64,
+        y: f64,
+        z: f64,
+        half_w: f64,
+        half_h: f64,
+        half_d: f64,
         color: [f32; 4],
     },
     /// グリッド地面描画（R-5）— パラメータから Rust が頂点を生成（後方互換）
     GridPlane {
-        size: f32,
+        size: f64,
         divisions: u32,
         color: [f32; 4],
     },
@@ -73,10 +75,10 @@ pub enum DrawCommand {
     /// 汎用スプライト描画（UV・サイズをコンテンツ側が直接指定する）。
     /// `Sprite` の kind_id → UV/サイズ変換テーブルを持たない新コンテンツ向け。
     SpriteRaw {
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
         /// アトラス UV オフセット（0.0〜1.0）
         uv_offset: [f32; 2],
         /// アトラス UV サイズ（0.0〜1.0）

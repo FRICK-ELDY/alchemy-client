@@ -6,23 +6,23 @@ use std::collections::HashMap;
 /// [`push_mesh_from_def`] へのインスタンス変換（中心・半拡張・色）。
 #[derive(Clone, Copy)]
 pub(super) struct MeshFromDefInst {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-    pub half_w: f32,
-    pub half_h: f32,
-    pub half_d: f32,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub half_w: f64,
+    pub half_h: f64,
+    pub half_d: f64,
     pub color: [f32; 4],
 }
 
 /// 軸平行ボックスの頂点（8 個）・インデックス（36 個）を生成する。
 pub(super) fn box_mesh(
-    cx: f32,
-    cy: f32,
-    cz: f32,
-    hw: f32,
-    hh: f32,
-    hd: f32,
+    cx: f64,
+    cy: f64,
+    cz: f64,
+    hw: f64,
+    hh: f64,
+    hd: f64,
     color: [f32; 4],
 ) -> ([MeshVertex; 8], [u32; 36]) {
     let (x0, x1) = (cx - hw, cx + hw);
@@ -111,12 +111,12 @@ pub(super) fn push_mesh_from_def(
 }
 
 /// XZ 平面上のグリッドラインを生成する（ラインリスト用）。
-pub(super) fn grid_lines(size: f32, divisions: u32, color: [f32; 4], out: &mut Vec<MeshVertex>) {
+pub(super) fn grid_lines(size: f64, divisions: u32, color: [f32; 4], out: &mut Vec<MeshVertex>) {
     let half = size / 2.0;
-    let step = size / divisions as f32;
+    let step = size / divisions as f64;
     let n = divisions + 1;
     for i in 0..n {
-        let t = -half + i as f32 * step;
+        let t = -half + i as f64 * step;
         out.push(MeshVertex {
             position: [-half, 0.0, t],
             color,

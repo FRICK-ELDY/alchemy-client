@@ -40,6 +40,28 @@ const SKYBOX_VERT_COUNT: usize = 4;
 
 // ─── MVP Uniform ─────────────────────────────────────────────────────────
 
+/// GPU 頂点。CPU 側 `MeshVertex` の position は f64 なので、アップロード直前にここへ落とす。
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct GpuMeshVertex {
+    position: [f32; 3],
+    color: [f32; 4],
+}
+
+fn to_gpu_mesh(verts: &[crate::MeshVertex]) -> Vec<GpuMeshVertex> {
+    verts
+        .iter()
+        .map(|v| GpuMeshVertex {
+            position: [v.position[0] as f32, v.position[1] as f32, v.position[2] as f32],
+            color: v.color,
+        })
+        .collect()
+}
+
+fn f32x3(v: [f64; 3]) -> [f32; 3] {
+    [v[0] as f32, v[1] as f32, v[2] as f32]
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct MvpUniform {
@@ -236,7 +258,7 @@ impl Pipeline3D {
         });
 
         let vertex_buffers = &[wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<MeshVertex>() as wgpu::BufferAddress,
+            array_stride: std::mem::size_of::<GpuMeshVertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &wgpu::vertex_attr_array![
                 0 => Float32x3, // position
@@ -343,14 +365,14 @@ impl Pipeline3D {
         // ─── 事前確保バッファ ─────────────────────────────────────
         let grid_vbuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Grid VBuf"),
-            size: (std::mem::size_of::<MeshVertex>() * MAX_GRID_VERTS) as u64,
+            size: (std::mem::size_of::<GpuMeshVertex>() * MAX_GRID_VERTS) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
         let box_vbuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Mesh VBuf"),
-            size: (std::mem::size_of::<MeshVertex>() * MAX_MESH_VERTS) as u64,
+            size: (std::mem::size_of::<GpuMeshVertex>() * MAX_MESH_VERTS) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -364,7 +386,7 @@ impl Pipeline3D {
 
         let sky_vbuf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Skybox VBuf"),
-            size: (std::mem::size_of::<MeshVertex>() * SKYBOX_VERT_COUNT) as u64,
+            size: (std::mem::size_of::<GpuMeshVertex>() * SKYBOX_VERT_COUNT) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -465,7 +487,15 @@ impl Pipeline3D {
 
         // ─── MVP Uniform を 3D カメラ行列で更新 ──────────────────
         let aspect = self.width as f32 / self.height as f32;
-        let mvp = MvpUniform::from_camera(*eye, *target, *up, *fov_deg, aspect, *near, *far);
+        let mvp = MvpUniform::from_camera(
+            f32x3(*eye),
+            f32x3(*target),
+            f32x3(*up),
+            *fov_deg,
+            aspect,
+            *near as f32,
+            *far as f32,
+        );
         self.queue
             .write_buffer(&self.mvp_buf, 0, bytemuck::bytes_of(&mvp));
 
@@ -503,8 +533,9 @@ impl Pipeline3D {
                 } else {
                     skybox_verts(top, bottom).to_vec()
                 };
+            let gpu_verts = to_gpu_mesh(&verts);
             self.queue
-                .write_buffer(&self.sky_vbuf, 0, bytemuck::cast_slice(&verts));
+                .write_buffer(&self.sky_vbuf, 0, bytemuck::cast_slice(&gpu_verts));
 
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Skybox Pass"),
@@ -579,11 +610,12 @@ impl Pipeline3D {
                 self.grid_verts_scratch.len()
             );
             let count = self.grid_verts_scratch.len().min(MAX_GRID_VERTS);
-            let byte_len = (count * std::mem::size_of::<MeshVertex>()) as u64;
+            let byte_len = (count * std::mem::size_of::<GpuMeshVertex>()) as u64;
+            let gpu_verts = to_gpu_mesh(&self.grid_verts_scratch[..count]);
             self.queue.write_buffer(
                 &self.grid_vbuf,
                 0,
-                bytemuck::cast_slice(&self.grid_verts_scratch[..count]),
+                bytemuck::cast_slice(&gpu_verts),
             );
             pass.set_pipeline(&self.grid_pipeline);
             pass.set_vertex_buffer(0, self.grid_vbuf.slice(..byte_len));
@@ -605,12 +637,13 @@ impl Pipeline3D {
             );
             let vcount = self.mesh_verts_scratch.len().min(MAX_MESH_VERTS);
             let icount = self.mesh_indices_scratch.len().min(MAX_MESH_INDICES);
-            let vbyte_len = (vcount * std::mem::size_of::<MeshVertex>()) as u64;
+            let vbyte_len = (vcount * std::mem::size_of::<GpuMeshVertex>()) as u64;
             let ibyte_len = (icount * std::mem::size_of::<u32>()) as u64;
+            let gpu_verts = to_gpu_mesh(&self.mesh_verts_scratch[..vcount]);
             self.queue.write_buffer(
                 &self.box_vbuf,
                 0,
-                bytemuck::cast_slice(&self.mesh_verts_scratch[..vcount]),
+                bytemuck::cast_slice(&gpu_verts),
             );
             self.queue.write_buffer(
                 &self.box_ibuf,

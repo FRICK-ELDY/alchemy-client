@@ -483,7 +483,7 @@ impl Renderer {
     /// `RenderFrame` の `DrawCommand` リストからインスタンスを構築して GPU バッファを更新する。
     pub fn update_instances(&mut self, frame: &crate::RenderFrame) {
         let (offset_x, offset_y) = frame.camera.offset_xy();
-        let cam_uniform = CameraUniform::new(offset_x, offset_y);
+        let cam_uniform = CameraUniform::new(offset_x as f32, offset_y as f32);
         self.queue.write_buffer(
             &self.camera_uniform_buf,
             0,
@@ -700,8 +700,8 @@ fn sprite_instance_from_command(cmd: &DrawCommand) -> Option<SpriteInstance> {
         } => {
             let (uv_off, uv_sz) = particle_uv();
             Some(SpriteInstance {
-                position: [x - size / 2.0, y - size / 2.0],
-                size: [size, size],
+                position: [(x - size / 2.0) as f32, (y - size / 2.0) as f32],
+                size: [size as f32, size as f32],
                 uv_offset: uv_off,
                 uv_size: uv_sz,
                 color_tint: [r, g, b, alpha],
@@ -716,8 +716,8 @@ fn sprite_instance_from_command(cmd: &DrawCommand) -> Option<SpriteInstance> {
             let sz = radius * 2.0;
             let (uv_off, uv_sz) = particle_uv();
             Some(SpriteInstance {
-                position: [x - radius, y - radius],
-                size: [sz, sz],
+                position: [(x - radius) as f32, (y - radius) as f32],
+                size: [sz as f32, sz as f32],
                 uv_offset: uv_off,
                 uv_size: uv_sz,
                 color_tint: [r, g, b, 1.0],
@@ -732,8 +732,8 @@ fn sprite_instance_from_command(cmd: &DrawCommand) -> Option<SpriteInstance> {
             uv_size,
             color_tint,
         } => Some(SpriteInstance {
-            position: [x, y],
-            size: [width, height],
+            position: [x as f32, y as f32],
+            size: [width as f32, height as f32],
             uv_offset,
             uv_size,
             color_tint,

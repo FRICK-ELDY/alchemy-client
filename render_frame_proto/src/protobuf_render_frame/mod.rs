@@ -2,7 +2,7 @@
 //!
 //! # デコード方針（緩いデコード）
 //!
-//! - `repeated float` や可変長フィールドが **短い・欠損**している場合、`f2` / `f4` / `f3` は **0 を埋める**（`f4` の alpha は 1.0）。
+//! - `repeated float` / `repeated double` が **短い・欠損**している場合、`f2` / `f4` / `d3` は **0 を埋める**（`f4` の alpha は 1.0）。
 //! - エンコーダバグの検知を遅らせうるため、厳密な検証が必要なら **契約テスト**（`tests/decode_contract.rs` 等）で担保する。
 //! - `uint32` → `u8` は飽和し、超過時は [`log::warn!`] する。
 
@@ -17,7 +17,7 @@ use shared::render_frame::{
 };
 
 use draw_command::draw_cmd_pb;
-use float_helpers::{f2, f3, f4, pad4};
+use float_helpers::{d3, f2, f4, pad4};
 use mesh_helpers::mesh_def_pb;
 
 pub(super) fn u32_to_u8_clamped(field: &'static str, v: u32) -> u8 {
@@ -82,9 +82,9 @@ fn camera_pb(c: pb::CameraParams) -> CameraParams {
             offset_y: c2.offset_y,
         },
         Some(Camera3d(c3)) => CameraParams::Camera3D {
-            eye: f3(&c3.eye),
-            target: f3(&c3.target),
-            up: f3(&c3.up),
+            eye: d3(&c3.eye),
+            target: d3(&c3.target),
+            up: d3(&c3.up),
             fov_deg: c3.fov_deg,
             near: c3.near,
             far: c3.far,

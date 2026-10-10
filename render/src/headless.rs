@@ -382,7 +382,7 @@ impl HeadlessRenderer {
     pub fn render_frame_offscreen(&mut self, frame: &RenderFrame) -> Result<Vec<u8>, String> {
         let (offset_x, offset_y) = frame.camera.offset_xy();
         let cam_uniform = CameraUniform {
-            offset: [offset_x as f32, offset_y as f32],
+            offset: [crate::gpu_f32(offset_x), crate::gpu_f32(offset_y)],
             _pad: [0.0; 2],
         };
         self.queue.write_buffer(

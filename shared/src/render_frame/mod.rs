@@ -128,11 +128,43 @@ impl Default for UiRect {
 
 // ── MeshVertex（DrawCommand::GridPlaneVerts / MeshDef で使用）───────────
 
-/// 3D メッシュ頂点（CPU 契約）。`position` は binary64。GPU 頂点へはアップロード直前に f32 へ落とす。
+/// 3D メッシュ頂点（CPU 契約）。`position` は binary64。
 #[derive(Clone, Copy, Debug)]
 pub struct MeshVertex {
     pub position: [f64; 3],
     pub color: [f32; 4],
+}
+
+/// 描画デバイスへ渡す直前の量子化。
+///
+/// ワイヤと補間は IEEE 754 binary64。GPU 頂点属性と画面上の座標は binary32 なので、
+/// ここで仮数が 24 ビットに落ちる。binary64 のまま画面まで届くことは保証しない。
+#[inline]
+pub fn gpu_f32(value: f64) -> f32 {
+    value as f32
+}
+
+/// [`gpu_f32`] を 3 成分に適用する。
+#[inline]
+pub fn gpu_position(position: [f64; 3]) -> [f32; 3] {
+    [
+        gpu_f32(position[0]),
+        gpu_f32(position[1]),
+        gpu_f32(position[2]),
+    ]
+}
+
+#[cfg(test)]
+mod gpu_quantization_tests {
+    use super::gpu_f32;
+
+    #[test]
+    fn gpu_f32_drops_integers_past_the_binary32_mantissa() {
+        let exact = 16_777_217.0_f64;
+        let quantized = gpu_f32(exact);
+        assert_ne!(quantized as f64, exact);
+        assert_eq!(quantized, 16_777_216.0);
+    }
 }
 
 mod draw_command;

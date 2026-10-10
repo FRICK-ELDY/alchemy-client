@@ -48,19 +48,14 @@ struct GpuMeshVertex {
     color: [f32; 4],
 }
 
-fn to_gpu_mesh(verts: &[crate::MeshVertex]) -> Vec<GpuMeshVertex> {
-    verts
-        .iter()
-        .map(|v| GpuMeshVertex {
-            position: [v.position[0] as f32, v.position[1] as f32, v.position[2] as f32],
-            color: v.color,
-        })
-        .collect()
+fn fill_gpu(dst: &mut Vec<GpuMeshVertex>, src: &[MeshVertex]) {
+    dst.clear();
+    dst.extend(src.iter().map(|v| GpuMeshVertex {
+        position: crate::gpu_position(v.position),
+        color: v.color,
+    }));
 }
 
-fn f32x3(v: [f64; 3]) -> [f32; 3] {
-    [v[0] as f32, v[1] as f32, v[2] as f32]
-}
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -198,6 +193,8 @@ pub(crate) struct Pipeline3D {
     /// メッシュパス用（`Box3D` / `Sphere3D` 等の展開先）
     mesh_verts_scratch: Vec<MeshVertex>,
     mesh_indices_scratch: Vec<u32>,
+    /// GPU アップロード用。毎フレーム clear して再利用する。
+    gpu_verts_scratch: Vec<GpuMeshVertex>,
     /// P3: Elixir 定義のメッシュキャッシュ（unit_box, skybox_quad 等）
     mesh_def_cache: HashMap<String, (Vec<MeshVertex>, Vec<u32>)>,
     /// 直前フレームで登録した mesh_definitions の名前リスト。同じなら insert をスキップする。
@@ -418,6 +415,7 @@ impl Pipeline3D {
             grid_verts_scratch: Vec::with_capacity(MAX_GRID_VERTS),
             mesh_verts_scratch: Vec::with_capacity(MAX_MESH_VERTS),
             mesh_indices_scratch: Vec::with_capacity(MAX_MESH_INDICES),
+            gpu_verts_scratch: Vec::with_capacity(MAX_MESH_VERTS.max(MAX_GRID_VERTS)),
             mesh_def_cache: HashMap::new(),
             mesh_def_cache_key: None,
         }
@@ -488,13 +486,13 @@ impl Pipeline3D {
         // ─── MVP Uniform を 3D カメラ行列で更新 ──────────────────
         let aspect = self.width as f32 / self.height as f32;
         let mvp = MvpUniform::from_camera(
-            f32x3(*eye),
-            f32x3(*target),
-            f32x3(*up),
+            crate::gpu_position(*eye),
+            crate::gpu_position(*target),
+            crate::gpu_position(*up),
             *fov_deg,
             aspect,
-            *near as f32,
-            *far as f32,
+            crate::gpu_f32(*near),
+            crate::gpu_f32(*far),
         );
         self.queue
             .write_buffer(&self.mvp_buf, 0, bytemuck::bytes_of(&mvp));
@@ -533,9 +531,9 @@ impl Pipeline3D {
                 } else {
                     skybox_verts(top, bottom).to_vec()
                 };
-            let gpu_verts = to_gpu_mesh(&verts);
+            fill_gpu(&mut self.gpu_verts_scratch, &verts);
             self.queue
-                .write_buffer(&self.sky_vbuf, 0, bytemuck::cast_slice(&gpu_verts));
+                .write_buffer(&self.sky_vbuf, 0, bytemuck::cast_slice(&self.gpu_verts_scratch));
 
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Skybox Pass"),
@@ -611,11 +609,11 @@ impl Pipeline3D {
             );
             let count = self.grid_verts_scratch.len().min(MAX_GRID_VERTS);
             let byte_len = (count * std::mem::size_of::<GpuMeshVertex>()) as u64;
-            let gpu_verts = to_gpu_mesh(&self.grid_verts_scratch[..count]);
+            fill_gpu(&mut self.gpu_verts_scratch, &self.grid_verts_scratch[..count]);
             self.queue.write_buffer(
                 &self.grid_vbuf,
                 0,
-                bytemuck::cast_slice(&gpu_verts),
+                bytemuck::cast_slice(&self.gpu_verts_scratch),
             );
             pass.set_pipeline(&self.grid_pipeline);
             pass.set_vertex_buffer(0, self.grid_vbuf.slice(..byte_len));
@@ -639,11 +637,11 @@ impl Pipeline3D {
             let icount = self.mesh_indices_scratch.len().min(MAX_MESH_INDICES);
             let vbyte_len = (vcount * std::mem::size_of::<GpuMeshVertex>()) as u64;
             let ibyte_len = (icount * std::mem::size_of::<u32>()) as u64;
-            let gpu_verts = to_gpu_mesh(&self.mesh_verts_scratch[..vcount]);
+            fill_gpu(&mut self.gpu_verts_scratch, &self.mesh_verts_scratch[..vcount]);
             self.queue.write_buffer(
                 &self.box_vbuf,
                 0,
-                bytemuck::cast_slice(&gpu_verts),
+                bytemuck::cast_slice(&self.gpu_verts_scratch),
             );
             self.queue.write_buffer(
                 &self.box_ibuf,

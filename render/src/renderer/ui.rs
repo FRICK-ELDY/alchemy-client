@@ -473,9 +473,9 @@ fn render_world_text(
     lifetime: f32,
     max_lifetime: f32,
 ) {
-    let world_x = world_x as f32;
-    let world_y = world_y as f32;
-    let world_z = world_z as f32;
+    let world_x = crate::gpu_f32(world_x);
+    let world_y = crate::gpu_f32(world_y);
+    let world_z = crate::gpu_f32(world_z);
 
     let alpha = if max_lifetime > 0.0 {
         (lifetime / max_lifetime).clamp(0.0, 1.0)
@@ -507,13 +507,13 @@ fn render_world_text(
             let aspect = w / h;
             // MVP でワールド座標 → クリップ座標に変換
             let mvp = world_text_mvp(
-                [eye[0] as f32, eye[1] as f32, eye[2] as f32],
-                [target[0] as f32, target[1] as f32, target[2] as f32],
-                [up[0] as f32, up[1] as f32, up[2] as f32],
+                crate::gpu_position(*eye),
+                crate::gpu_position(*target),
+                crate::gpu_position(*up),
                 fov_deg.to_radians(),
                 aspect,
-                *near as f32,
-                *far as f32,
+                crate::gpu_f32(*near),
+                crate::gpu_f32(*far),
             );
             let clip = mat4_mul_vec4(mvp, [world_x, world_y, world_z, 1.0]);
             // カメラ背後（w <= 0）は描画しない
@@ -529,7 +529,7 @@ fn render_world_text(
         }
         CameraParams::Camera2D { .. } => {
             let (cam_x, cam_y) = camera.offset_xy();
-            egui::pos2(world_x - cam_x as f32, world_y - cam_y as f32)
+            egui::pos2(world_x - crate::gpu_f32(cam_x), world_y - crate::gpu_f32(cam_y))
         }
     };
 

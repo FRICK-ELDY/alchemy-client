@@ -56,7 +56,6 @@ fn fill_gpu(dst: &mut Vec<GpuMeshVertex>, src: &[MeshVertex]) {
     }));
 }
 
-
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct MvpUniform {
@@ -532,8 +531,11 @@ impl Pipeline3D {
                     skybox_verts(top, bottom).to_vec()
                 };
             fill_gpu(&mut self.gpu_verts_scratch, &verts);
-            self.queue
-                .write_buffer(&self.sky_vbuf, 0, bytemuck::cast_slice(&self.gpu_verts_scratch));
+            self.queue.write_buffer(
+                &self.sky_vbuf,
+                0,
+                bytemuck::cast_slice(&self.gpu_verts_scratch),
+            );
 
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Skybox Pass"),
@@ -609,7 +611,10 @@ impl Pipeline3D {
             );
             let count = self.grid_verts_scratch.len().min(MAX_GRID_VERTS);
             let byte_len = (count * std::mem::size_of::<GpuMeshVertex>()) as u64;
-            fill_gpu(&mut self.gpu_verts_scratch, &self.grid_verts_scratch[..count]);
+            fill_gpu(
+                &mut self.gpu_verts_scratch,
+                &self.grid_verts_scratch[..count],
+            );
             self.queue.write_buffer(
                 &self.grid_vbuf,
                 0,
@@ -637,7 +642,10 @@ impl Pipeline3D {
             let icount = self.mesh_indices_scratch.len().min(MAX_MESH_INDICES);
             let vbyte_len = (vcount * std::mem::size_of::<GpuMeshVertex>()) as u64;
             let ibyte_len = (icount * std::mem::size_of::<u32>()) as u64;
-            fill_gpu(&mut self.gpu_verts_scratch, &self.mesh_verts_scratch[..vcount]);
+            fill_gpu(
+                &mut self.gpu_verts_scratch,
+                &self.mesh_verts_scratch[..vcount],
+            );
             self.queue.write_buffer(
                 &self.box_vbuf,
                 0,

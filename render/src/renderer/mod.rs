@@ -700,7 +700,10 @@ fn sprite_instance_from_command(cmd: &DrawCommand) -> Option<SpriteInstance> {
         } => {
             let (uv_off, uv_sz) = particle_uv();
             Some(SpriteInstance {
-                position: [crate::gpu_f32(x - size / 2.0), crate::gpu_f32(y - size / 2.0)],
+                position: [
+                    crate::gpu_f32(x - size / 2.0),
+                    crate::gpu_f32(y - size / 2.0),
+                ],
                 size: [crate::gpu_f32(size), crate::gpu_f32(size)],
                 uv_offset: uv_off,
                 uv_size: uv_sz,

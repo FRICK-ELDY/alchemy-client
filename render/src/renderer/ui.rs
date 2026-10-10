@@ -529,7 +529,10 @@ fn render_world_text(
         }
         CameraParams::Camera2D { .. } => {
             let (cam_x, cam_y) = camera.offset_xy();
-            egui::pos2(world_x - crate::gpu_f32(cam_x), world_y - crate::gpu_f32(cam_y))
+            egui::pos2(
+                world_x - crate::gpu_f32(cam_x),
+                world_y - crate::gpu_f32(cam_y),
+            )
         }
     };
 

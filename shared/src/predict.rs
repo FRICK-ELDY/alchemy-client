@@ -8,6 +8,6 @@ use crate::types::Vec2;
 /// 入力予測（スケルトン）
 /// 現時点では入力をそのまま返す
 #[inline]
-pub fn predict_input(current: Vec2, _delta_ms: f32) -> Vec2 {
+pub fn predict_input(current: Vec2, _delta_ms: f64) -> Vec2 {
     current
 }

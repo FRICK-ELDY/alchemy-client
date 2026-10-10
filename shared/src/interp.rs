@@ -38,25 +38,25 @@ const INTERVAL_MAX: Duration = Duration::from_millis(120);
 /// 同一バリアント内で「同じエンティティ」とみなす最大移動距離。
 /// bullet_hell の弾速 7.0 × 欠落込み ~0.3s ≈ 2.1 に余裕を持たせた値。
 /// これを超えるペアはスポーン／デスポーンによる別個体とみなし、補間せず curr を採用する。
-pub const MAX_MATCH_DISTANCE: f32 = 3.0;
+pub const MAX_MATCH_DISTANCE: f64 = 3.0;
 
 /// a と b を t (0.0..=1.0) で線形補間
 #[inline]
-pub fn lerp_vec2(a: Vec2, b: Vec2, t: f32) -> Vec2 {
+pub fn lerp_vec2(a: Vec2, b: Vec2, t: f64) -> Vec2 {
     Vec2 {
         x: a.x + (b.x - a.x) * t,
         y: a.y + (b.y - a.y) * t,
     }
 }
 
-/// f32 の線形補間
+/// binary64 の線形補間
 #[inline]
-pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
+pub fn lerp(a: f64, b: f64, t: f64) -> f64 {
     a + (b - a) * t
 }
 
 #[inline]
-fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+fn lerp3(a: [f64; 3], b: [f64; 3], t: f64) -> [f64; 3] {
     [
         lerp(a[0], b[0], t),
         lerp(a[1], b[1], t),
@@ -65,7 +65,7 @@ fn lerp3(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
 }
 
 /// 同一バリアントの位置成分を `t` で補間する。不一致・非位置コマンドは `curr` を返す。
-pub fn lerp_draw_command(prev: &DrawCommand, curr: &DrawCommand, t: f32) -> DrawCommand {
+pub fn lerp_draw_command(prev: &DrawCommand, curr: &DrawCommand, t: f64) -> DrawCommand {
     match (prev, curr) {
         (
             DrawCommand::PlayerSprite { x: ax, y: ay, .. },
@@ -212,7 +212,7 @@ pub fn lerp_draw_command(prev: &DrawCommand, curr: &DrawCommand, t: f32) -> Draw
     }
 }
 
-fn lerp_camera(prev: &CameraParams, curr: &CameraParams, t: f32) -> CameraParams {
+fn lerp_camera(prev: &CameraParams, curr: &CameraParams, t: f64) -> CameraParams {
     match (prev, curr) {
         (
             CameraParams::Camera2D {
@@ -257,7 +257,7 @@ fn lerp_camera(prev: &CameraParams, curr: &CameraParams, t: f32) -> CameraParams
 ///
 /// `Particle` は大量生成され得て O(N×M) 探索のコストが大きい一方、
 /// 個別の厳密補間の重要性が低いため対象外（`None` → curr をそのまま採用）。
-fn command_position(cmd: &DrawCommand) -> Option<[f32; 3]> {
+fn command_position(cmd: &DrawCommand) -> Option<[f64; 3]> {
     match *cmd {
         DrawCommand::PlayerSprite { x, y, .. }
         | DrawCommand::Item { x, y, .. }
@@ -274,7 +274,7 @@ fn command_position(cmd: &DrawCommand) -> Option<[f32; 3]> {
 }
 
 #[inline]
-fn dist_sq(a: [f32; 3], b: [f32; 3]) -> f32 {
+fn dist_sq(a: [f64; 3], b: [f64; 3]) -> f64 {
     let dx = a[0] - b[0];
     let dy = a[1] - b[1];
     let dz = a[2] - b[2];
@@ -312,12 +312,12 @@ fn find_nearest_prev(
     prev_commands: &[DrawCommand],
     curr_cmd: &DrawCommand,
     used: &[bool],
-    max_dist: f32,
+    max_dist: f64,
 ) -> Option<usize> {
     let curr_pos = command_position(curr_cmd)?;
     let max_dist_sq = max_dist * max_dist;
 
-    let mut best: Option<(usize, f32)> = None;
+    let mut best: Option<(usize, f64)> = None;
     for (i, prev_cmd) in prev_commands.iter().enumerate() {
         if used[i] || !is_compatible_command(prev_cmd, curr_cmd) {
             continue;
@@ -354,7 +354,7 @@ fn find_nearest_prev(
 /// 契約型を崩さず抑える本命は、変化の少ないデータを `Arc` 化し clone を O(1) にすること。
 /// グローバルアロケータ（mimalloc 等）の導入も別途検討。いずれも RenderFrame 契約〜描画経路の
 /// 横断変更になるため、補間配線のスコープ外とする。
-pub fn interpolate_render_frame(prev: &RenderFrame, curr: &RenderFrame, t: f32) -> RenderFrame {
+pub fn interpolate_render_frame(prev: &RenderFrame, curr: &RenderFrame, t: f64) -> RenderFrame {
     let t = t.clamp(0.0, 1.0);
     if t <= 0.0 {
         return prev.clone();
@@ -605,7 +605,7 @@ impl SnapshotInterpolator {
                         return Some(curr.clone());
                     }
                     let since_prev = render_time.saturating_duration_since(*prev_at);
-                    let t = (since_prev.as_secs_f64() / span.as_secs_f64()) as f32;
+                    let t = since_prev.as_secs_f64() / span.as_secs_f64();
                     return Some(interpolate_render_frame(prev, curr, t));
                 }
 
@@ -621,7 +621,7 @@ mod tests {
     use super::*;
     use crate::render_frame::CameraParams;
 
-    fn player_at(x: f32, y: f32) -> RenderFrame {
+    fn player_at(x: f64, y: f64) -> RenderFrame {
         RenderFrame {
             commands: vec![DrawCommand::PlayerSprite { x, y, frame: 1 }],
             camera: CameraParams::Camera2D {
@@ -752,7 +752,7 @@ mod tests {
         }
     }
 
-    fn sphere_at(x: f32, z: f32) -> DrawCommand {
+    fn sphere_at(x: f64, z: f64) -> DrawCommand {
         DrawCommand::Sphere3D {
             x,
             y: 0.15,
@@ -776,7 +776,7 @@ mod tests {
         };
         let mid = interpolate_render_frame(&prev, &curr, 0.5);
         assert_eq!(mid.commands.len(), 2);
-        let mut xs: Vec<f32> = mid
+        let mut xs: Vec<f64> = mid
             .commands
             .iter()
             .map(|c| match c {
@@ -1021,10 +1021,10 @@ mod tests {
         const FAST_FRAMES: i32 = 80;
         for i in 1..=FAST_FRAMES {
             t += Duration::from_millis(50);
-            interp.push(player_at(i as f32, 0.0), t);
+            interp.push(player_at(i as f64, 0.0), t);
         }
 
-        let latest = FAST_FRAMES as f32;
+        let latest = FAST_FRAMES as f64;
         let frame = interp.sample(t + Duration::from_millis(1)).expect("frame");
         match &frame.commands[0] {
             DrawCommand::PlayerSprite { x, .. } => {
@@ -1045,10 +1045,10 @@ mod tests {
         interp.push(player_at(0.0, 0.0), t0);
 
         let mut t = t0;
-        let mut latest = 0.0_f32;
+        let mut latest = 0.0_f64;
         for cycle in 0..200 {
             t += Duration::from_millis(148);
-            latest = (cycle * 3) as f32 + 1.0;
+            latest = (cycle * 3) as f64 + 1.0;
             interp.push(player_at(latest, 0.0), t);
             t += Duration::from_millis(1);
             latest += 1.0;
@@ -1087,7 +1087,7 @@ mod tests {
         // 16 フレーム窓の壁時計平均が急に縮み、max_playback_ahead が減少する
         for i in 1..=RATE_WINDOW_FRAMES {
             t += Duration::from_millis(1);
-            interp.push(player_at(i as f32, 0.0), t);
+            interp.push(player_at(i as f64, 0.0), t);
         }
 
         let ats = interp.playback_ats();

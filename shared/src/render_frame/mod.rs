@@ -104,9 +104,9 @@ pub enum UiComponent {
     Spacing { amount: f32 },
     /// ワールド座標上に浮かぶポップアップテキスト（スコア表示等）
     WorldText {
-        world_x: f32,
-        world_y: f32,
-        world_z: f32,
+        world_x: f64,
+        world_y: f64,
+        world_z: f64,
         text: String,
         color: [f32; 4],
         lifetime: f32,
@@ -128,12 +128,43 @@ impl Default for UiRect {
 
 // ── MeshVertex（DrawCommand::GridPlaneVerts / MeshDef で使用）───────────
 
-/// 3D メッシュ頂点（position + color）
-#[repr(C)]
-#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+/// 3D メッシュ頂点（CPU 契約）。`position` は binary64。
+#[derive(Clone, Copy, Debug)]
 pub struct MeshVertex {
-    pub position: [f32; 3],
+    pub position: [f64; 3],
     pub color: [f32; 4],
+}
+
+/// 描画デバイスへ渡す直前の量子化。
+///
+/// ワイヤと補間は IEEE 754 binary64。GPU 頂点属性と画面上の座標は binary32 なので、
+/// ここで仮数が 24 ビットに落ちる。binary64 のまま画面まで届くことは保証しない。
+#[inline]
+pub fn gpu_f32(value: f64) -> f32 {
+    value as f32
+}
+
+/// [`gpu_f32`] を 3 成分に適用する。
+#[inline]
+pub fn gpu_position(position: [f64; 3]) -> [f32; 3] {
+    [
+        gpu_f32(position[0]),
+        gpu_f32(position[1]),
+        gpu_f32(position[2]),
+    ]
+}
+
+#[cfg(test)]
+mod gpu_quantization_tests {
+    use super::gpu_f32;
+
+    #[test]
+    fn gpu_f32_drops_integers_past_the_binary32_mantissa() {
+        let exact = 16_777_217.0_f64;
+        let quantized = gpu_f32(exact);
+        assert_ne!(quantized as f64, exact);
+        assert_eq!(quantized, 16_777_216.0);
+    }
 }
 
 mod draw_command;
@@ -146,19 +177,19 @@ pub use draw_command::DrawCommand;
 #[derive(Clone, Debug)]
 pub enum CameraParams {
     Camera2D {
-        offset_x: f32,
-        offset_y: f32,
+        offset_x: f64,
+        offset_y: f64,
     },
     /// 3D カメラ（R-5）
     Camera3D {
-        eye: [f32; 3],
-        target: [f32; 3],
-        up: [f32; 3],
+        eye: [f64; 3],
+        target: [f64; 3],
+        up: [f64; 3],
         fov_deg: f32,
         /// ニアクリップ面（デフォルト 0.1）
-        near: f32,
+        near: f64,
         /// ファークリップ面（デフォルト 1000.0）
-        far: f32,
+        far: f64,
     },
 }
 
@@ -174,7 +205,7 @@ impl Default for CameraParams {
 impl CameraParams {
     /// 2D カメラのワールド座標オフセットを返す。
     /// 3D カメラの場合は (0, 0) を返す（3D パイプラインは MVP 行列で処理するため不使用）。
-    pub fn offset_xy(&self) -> (f32, f32) {
+    pub fn offset_xy(&self) -> (f64, f64) {
         match self {
             Self::Camera2D { offset_x, offset_y } => (*offset_x, *offset_y),
             Self::Camera3D { .. } => (0.0, 0.0),

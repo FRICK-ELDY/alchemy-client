@@ -5,6 +5,7 @@
 //! 受信スナップショットは `shared::SnapshotInterpolator` で直近 2 枚を保持し、
 //! ~100ms の描画遅延バッファ上で座標を線形補間して 60fps 描画へ渡す。
 
+use crate::room_envelope::wrap_room_payload;
 use crate::{action_key, client_info_key, frame_key, movement_key, ClientInfo, ClientSession};
 use audio::AudioCommandSender;
 use render::window::{KeyCode, KeyState, RenderBridge};
@@ -18,6 +19,28 @@ use std::time::{Duration, Instant};
 
 /// この時間フレームを受信しなければ切断（未接続）とみなす。
 const CONNECTED_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// RoomToken のサーバ側寿命（300 秒）より前に取り直す。
+const ROOM_TOKEN_REFRESH: Duration = Duration::from_secs(240);
+
+/// サーバが署名時に埋め込む最大寿命。これを過ぎたトークンは封筒に載せない。
+const ROOM_TOKEN_TTL: Duration = Duration::from_secs(300);
+
+/// 取得失敗のあと、次の `POST /api/room_token` まで空ける。
+const ROOM_TOKEN_RETRY: Duration = Duration::from_secs(5);
+
+/// access token と room_id から RoomToken を取る。
+pub type RoomTokenFetch = Arc<dyn Fn(&str, &str) -> Result<String, String> + Send + Sync>;
+
+struct RoomAuthState {
+    access_token: Option<String>,
+    room_token: Option<Arc<str>>,
+    issued_at: Option<Instant>,
+    /// この時刻より前は取得しない。失敗直後の毎フレーム再送を止める。
+    retry_not_before: Option<Instant>,
+    fetch: Option<RoomTokenFetch>,
+    room_id: String,
+}
 
 /// WASD / 矢印キー → dx, dy
 fn move_vector_from_keys(keys: &HashSet<KeyCode>) -> (f32, f32) {
@@ -47,6 +70,16 @@ pub struct NetworkRenderBridge {
     /// ロック競合を避けて AtomicU64 でロックフリーに管理する。
     last_frame_elapsed_ms: Arc<AtomicU64>,
     creation_time: Instant,
+    room_auth: Arc<Mutex<RoomAuthState>>,
+    room_token_refreshing: Arc<AtomicBool>,
+    client_info_publish: Arc<Mutex<ClientInfoPublish>>,
+}
+
+/// `sent == None` は未送信。`Some(None)` は未ログインの生送信。`Some(Some(token))` はその RoomToken で送信済み。
+struct ClientInfoPublish {
+    sent: Option<Option<Arc<str>>>,
+    /// put 失敗後、同じトークンではこの時刻まで再送しない。
+    retry_not_before: Option<(Option<Arc<str>>, Instant)>,
 }
 
 impl NetworkRenderBridge {
@@ -60,6 +93,17 @@ impl NetworkRenderBridge {
         connect_config: &str,
         room_id: &str,
         audio_tx: Option<AudioCommandSender>,
+    ) -> Result<Self, String> {
+        Self::new_with_room_auth(connect_config, room_id, audio_tx, None)
+    }
+
+    /// `fetch` があると、`set_bearer_for_room` で渡した access token から RoomToken を取り、
+    /// movement / action / client_info を封筒に載せる。
+    pub fn new_with_room_auth(
+        connect_config: &str,
+        room_id: &str,
+        audio_tx: Option<AudioCommandSender>,
+        fetch: Option<RoomTokenFetch>,
     ) -> Result<Self, String> {
         let session = ClientSession::open(connect_config)?;
 
@@ -117,25 +161,121 @@ impl NetworkRenderBridge {
             shutdown,
             last_frame_elapsed_ms,
             creation_time,
+            room_auth: Arc::new(Mutex::new(RoomAuthState {
+                access_token: None,
+                room_token: None,
+                issued_at: None,
+                retry_not_before: None,
+                fetch,
+                room_id: room_id.to_string(),
+            })),
+            room_token_refreshing: Arc::new(AtomicBool::new(false)),
+            client_info_publish: Arc::new(Mutex::new(ClientInfoPublish {
+                sent: None,
+                retry_not_before: None,
+            })),
         };
-        bridge.publish_client_info(room_id);
+        bridge.publish_client_info_if_token_changed();
         Ok(bridge)
     }
 
-    fn publish_client_info(&self, room_id: &str) {
+    /// ログイン中で、まだ有効な RoomToken が無いときは `None`（生の protobuf は送らない）。
+    /// 未ログイン（access token なし）のときだけ生の protobuf を返す。
+    fn seal(&self, protobuf: Vec<u8>) -> Option<(Vec<u8>, Option<Arc<str>>)> {
+        let guard = self.room_auth.lock().ok()?;
+        if guard.access_token.is_none() {
+            return Some((protobuf, None));
+        }
+        let token = usable_room_token(&guard)?;
+        match wrap_room_payload(&token, &protobuf) {
+            Ok(wrapped) => Some((wrapped, Some(token))),
+            Err(e) => {
+                log::warn!("room token envelope skipped: {e}");
+                None
+            }
+        }
+    }
+
+    /// put に成功したとき、その送信に使った RoomToken（未ログインの生送信は `None`）を返す。
+    fn publish_client_info(&self) -> Option<Option<Arc<str>>> {
+        let room_id = match self.room_auth.lock() {
+            Ok(guard) => guard.room_id.clone(),
+            Err(e) => {
+                log::warn!("client info skipped, room auth lock poisoned: {e}");
+                return None;
+            }
+        };
         let info = ClientInfo::current();
-        let payload = match crate::protobuf_codec::encode_client_info(&info) {
-            Ok(p) => p,
+        let (payload, token) = match crate::protobuf_codec::encode_client_info(&info) {
+            Ok(p) => match self.seal(p) {
+                Some(sealed) => sealed,
+                None => return None,
+            },
             Err(e) => {
                 log::warn!("client info serialize error: {e}");
+                return None;
+            }
+        };
+        let key = client_info_key(&room_id);
+        match self.session.put(&key, &payload) {
+            Ok(()) => {
+                log::info!("[client info] published to {key}");
+                Some(token)
+            }
+            Err(e) => {
+                log::warn!("client info publish error: {e}");
+                None
+            }
+        }
+    }
+
+    fn publish_client_info_if_token_changed(&self) {
+        let current = match self.room_auth.lock() {
+            Ok(guard) => {
+                if guard.access_token.is_some() {
+                    match usable_room_token(&guard) {
+                        Some(token) => Some(token),
+                        None => return,
+                    }
+                } else {
+                    None
+                }
+            }
+            Err(e) => {
+                log::warn!("client info generation lock poisoned: {e}");
                 return;
             }
         };
-        let key = client_info_key(room_id);
-        if let Err(e) = self.session.put(&key, &payload) {
-            log::warn!("client info publish error: {e}");
-        } else {
-            log::info!("[client info] published to {key}");
+        let should_send = match self.client_info_publish.lock() {
+            Ok(state) => {
+                if state.sent.as_ref() == Some(&current) {
+                    false
+                } else if let Some((failed_for, at)) = &state.retry_not_before {
+                    failed_for != &current || Instant::now() >= *at
+                } else {
+                    true
+                }
+            }
+            Err(e) => {
+                log::warn!("client info generation lock poisoned: {e}");
+                return;
+            }
+        };
+        if !should_send {
+            return;
+        }
+        match self.publish_client_info() {
+            Some(sent_token) => {
+                if let Ok(mut state) = self.client_info_publish.lock() {
+                    state.sent = Some(sent_token);
+                    state.retry_not_before = None;
+                }
+            }
+            None => {
+                if let Ok(mut state) = self.client_info_publish.lock() {
+                    state.retry_not_before = Some((current, Instant::now() + ROOM_TOKEN_RETRY));
+                }
+            }
         }
     }
 
@@ -146,6 +286,9 @@ impl NetworkRenderBridge {
                 log::warn!("movement serialize error: {e}");
                 return;
             }
+        };
+        let Some((payload, _)) = self.seal(payload) else {
+            return;
         };
         if let Err(e) = self.session.put_drop(&self.movement_key_expr, &payload) {
             log::warn!("[input:client] movement publish failed: {e}");
@@ -160,10 +303,113 @@ impl NetworkRenderBridge {
                 return;
             }
         };
+        let Some((payload, _)) = self.seal(payload) else {
+            return;
+        };
         if let Err(e) = self.session.put(&self.action_key_expr, &payload) {
             log::warn!("action publish failed: {e}");
         }
     }
+
+    fn ensure_room_token(&self) {
+        let needs_fetch = match self.room_auth.lock() {
+            Ok(guard) => {
+                let due = guard
+                    .issued_at
+                    .is_none_or(|issued| issued.elapsed() >= ROOM_TOKEN_REFRESH);
+                let retry_open = guard.retry_not_before.is_none_or(|at| Instant::now() >= at);
+                guard.access_token.is_some() && guard.fetch.is_some() && due && retry_open
+            }
+            Err(e) => {
+                log::warn!("room auth lock poisoned: {e}");
+                false
+            }
+        };
+        if !needs_fetch {
+            return;
+        }
+        if self
+            .room_token_refreshing
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+            .is_err()
+        {
+            return;
+        }
+
+        let auth = Arc::clone(&self.room_auth);
+        let flag = Arc::clone(&self.room_token_refreshing);
+        thread::spawn(move || {
+            let _guard = RefreshFlagGuard {
+                flag,
+                auth: Arc::clone(&auth),
+            };
+            let job = match auth.lock() {
+                Ok(guard) => match (guard.fetch.clone(), guard.access_token.clone()) {
+                    (Some(fetch), Some(access)) => Some((fetch, access, guard.room_id.clone())),
+                    _ => None,
+                },
+                Err(e) => {
+                    log::warn!("room token refresh lock poisoned: {e}");
+                    None
+                }
+            };
+
+            if let Some((fetch, access, room_id)) = job {
+                let result = fetch(&access, &room_id);
+                match auth.lock() {
+                    Ok(mut guard) => {
+                        if guard.access_token.as_ref() == Some(&access) {
+                            match result {
+                                Ok(token) => {
+                                    guard.room_token = Some(Arc::from(token));
+                                    guard.issued_at = Some(Instant::now());
+                                    guard.retry_not_before = None;
+                                }
+                                Err(e) => {
+                                    log::warn!("room token fetch failed: {e}");
+                                    guard.retry_not_before =
+                                        Some(Instant::now() + ROOM_TOKEN_RETRY);
+                                    if guard
+                                        .issued_at
+                                        .is_some_and(|issued| issued.elapsed() >= ROOM_TOKEN_TTL)
+                                    {
+                                        guard.room_token = None;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => log::warn!("room token store lock poisoned: {e}"),
+                }
+            }
+        });
+    }
+}
+
+/// 取得スレッドがパニックしてもフラグを戻し、直後の再取得を止める。
+struct RefreshFlagGuard {
+    flag: Arc<AtomicBool>,
+    auth: Arc<Mutex<RoomAuthState>>,
+}
+
+impl Drop for RefreshFlagGuard {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            log::warn!("room token fetch panicked");
+            if let Ok(mut guard) = self.auth.lock() {
+                guard.retry_not_before = Some(Instant::now() + ROOM_TOKEN_RETRY);
+            }
+        }
+        self.flag.store(false, Ordering::Release);
+    }
+}
+
+fn usable_room_token(guard: &RoomAuthState) -> Option<Arc<str>> {
+    let issued = guard.issued_at?;
+    if issued.elapsed() >= ROOM_TOKEN_TTL {
+        return None;
+    }
+    guard.room_token.clone()
 }
 
 fn decode_render_frame_from_zenoh(
@@ -190,6 +436,8 @@ impl RenderBridge for NetworkRenderBridge {
                 (0.0, 0.0)
             }
         };
+        self.ensure_room_token();
+        self.publish_client_info_if_token_changed();
         self.publish_movement(dx, dy);
 
         let now = Instant::now();
@@ -240,6 +488,29 @@ impl RenderBridge for NetworkRenderBridge {
             keys.clear();
         } else {
             log::warn!("[network_render_bridge] keys_held lock failed (poisoned) in on_focus_lost");
+        }
+    }
+
+    fn set_bearer_for_room(&self, access_token: Option<&str>) {
+        let changed = match self.room_auth.lock() {
+            Ok(mut guard) => {
+                if guard.access_token.as_deref() == access_token {
+                    false
+                } else {
+                    guard.access_token = access_token.map(str::to_string);
+                    guard.room_token = None;
+                    guard.issued_at = None;
+                    guard.retry_not_before = None;
+                    true
+                }
+            }
+            Err(e) => {
+                log::warn!("room auth lock poisoned: {e}");
+                false
+            }
+        };
+        if changed {
+            self.ensure_room_token();
         }
     }
 

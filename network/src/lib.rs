@@ -14,8 +14,9 @@ pub mod pb {
 pub mod platform;
 pub mod protobuf_codec;
 pub mod protobuf_render_frame;
+mod room_envelope;
 
 pub use common::*;
-pub use network_render_bridge::NetworkRenderBridge;
+pub use network_render_bridge::{NetworkRenderBridge, RoomTokenFetch};
 pub use platform::ClientSession;
 pub use shared::ClientInfo;

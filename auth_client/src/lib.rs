@@ -1,8 +1,8 @@
 //! auth_client: alchemy-auth API クライアント
 //!
-//! クライアント ↔ auth の直接 HTTPS 通信のみを担う。資格情報（パスワード・
-//! トークン）はこのクレートと呼び出し元（system_ui）だけを通り、
-//! Zenoh / engine サーバには一切流さない（login-register-ui-plan.md 2.1）。
+//! クライアント ↔ auth の HTTPS 通信と、world-server の `POST /api/room_token`
+//! （Bearer の access token から入室用 RoomToken を取る）を担う。
+//! パスワードと access token は Zenoh には載せない。Zenoh に載るのは RoomToken だけ。
 //!
 //! # 実行モデル
 //!
@@ -16,7 +16,9 @@ mod models;
 mod task;
 mod token_store;
 
-pub use api::{default_base_url, AuthClient, AUTH_URL_ENV};
+pub use api::{
+    default_base_url, default_engine_base_url, AuthClient, AUTH_URL_ENV, ENGINE_URL_ENV,
+};
 pub use error::AuthError;
 pub use models::{FieldErrors, RegisterRequest, Session, UserInfo};
 pub use task::AuthTask;

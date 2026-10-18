@@ -211,6 +211,11 @@ impl<B: RenderBridge> ApplicationHandler for DesktopApp<B> {
                 }
 
                 self.system_ui.set_connected(self.bridge.is_connected());
+                let bearer = self
+                    .system_ui
+                    .auth_session()
+                    .map(|session| session.access_token.as_str());
+                self.bridge.set_bearer_for_room(bearer);
                 let frame = self.bridge.next_frame();
 
                 // サーバ希望のカーソル状態を記録し、メニュー非表示時のみ適用する

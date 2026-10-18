@@ -41,4 +41,8 @@ pub trait RenderBridge: Send + 'static {
     fn is_connected(&self) -> bool {
         false
     }
+
+    /// ログイン中の access token。RoomToken を取るための入力で、描画データでもワイヤでもない。
+    /// フレームループがセッション変化を伝える入口。未ログインは `None`。
+    fn set_bearer_for_room(&self, _access_token: Option<&str>) {}
 }

@@ -207,10 +207,7 @@ impl NetworkRenderBridge {
         };
         let info = ClientInfo::current();
         let (payload, token) = match crate::protobuf_codec::encode_client_info(&info) {
-            Ok(p) => match self.seal(p) {
-                Some(sealed) => sealed,
-                None => return None,
-            },
+            Ok(p) => self.seal(p)?,
             Err(e) => {
                 log::warn!("client info serialize error: {e}");
                 return None;

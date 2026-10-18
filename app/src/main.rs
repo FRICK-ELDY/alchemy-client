@@ -12,12 +12,16 @@
 //!   ASSETS_ID - コンテンツ別サブディレクトリ（例: bullet_hell_3d）で assets/{id}/ を参照
 //!   ALCHEMY_AUTH_URL - alchemy-auth のベース URL（既定 http://localhost:4002。
 //!                      localhost 以外は https 必須）
+//!   ALCHEMY_ENGINE_URL - world-server の HTTP（既定 http://127.0.0.1:4000。
+//!                        RoomToken の取得先。localhost 以外は https 必須）
 
 use audio::{start_audio_thread, AssetLoader};
-use network::NetworkRenderBridge;
+use network::{NetworkRenderBridge, RoomTokenFetch};
 use render::window::{RendererInit, WindowConfig};
 use shared::display::{SCREEN_HEIGHT, SCREEN_WIDTH};
-use system_ui::{auth_client::AuthClient, SystemUi};
+use std::sync::Arc;
+use system_ui::auth_client::{default_engine_base_url, AuthClient, ENGINE_URL_ENV};
+use system_ui::SystemUi;
 use window::run_desktop_loop_with_system_ui;
 
 fn main() -> Result<(), String> {
@@ -39,7 +43,12 @@ fn main() -> Result<(), String> {
     let (sprite_wgsl, mesh_wgsl) = load_shaders(assets_path.as_deref());
 
     let audio_tx = start_audio_thread(loader.clone());
-    let bridge = NetworkRenderBridge::new_with_audio(connect_str, &room_id, Some(audio_tx))?;
+    let bridge = NetworkRenderBridge::new_with_room_auth(
+        connect_str,
+        &room_id,
+        Some(audio_tx),
+        Some(room_token_fetcher()),
+    )?;
 
     let config = WindowConfig {
         title: format!("Alchemy Client — room {}", room_id),
@@ -53,6 +62,19 @@ fn main() -> Result<(), String> {
     };
 
     run_desktop_loop_with_system_ui(bridge, config, build_system_ui())
+}
+
+fn room_token_fetcher() -> RoomTokenFetch {
+    let client = AuthClient::from_env().ok();
+    let engine = std::env::var(ENGINE_URL_ENV).unwrap_or_else(|_| default_engine_base_url());
+    Arc::new(move |access_token, room_id| {
+        let client = client
+            .clone()
+            .ok_or_else(|| "auth client is not configured".to_string())?;
+        client
+            .issue_room_token(&engine, access_token, room_id)
+            .map_err(|e| e.to_string())
+    })
 }
 
 /// システムメニューを構成する。auth URL が不正でもクライアント自体は起動し、

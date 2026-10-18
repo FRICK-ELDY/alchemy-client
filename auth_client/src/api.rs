@@ -8,9 +8,22 @@ use std::time::Duration;
 /// auth のベース URL を指定する環境変数。
 pub const AUTH_URL_ENV: &str = "ALCHEMY_AUTH_URL";
 
+/// world-server の HTTP ベース URL（`POST /api/room_token`）。
+pub const ENGINE_URL_ENV: &str = "ALCHEMY_ENGINE_URL";
+
 /// 未指定時の既定 URL（ローカル開発用 alchemy-auth）。
 pub fn default_base_url() -> String {
     "http://localhost:4002".to_string()
+}
+
+/// 未指定時の world-server URL。
+pub fn default_engine_base_url() -> String {
+    "http://127.0.0.1:4000".to_string()
+}
+
+#[derive(serde::Deserialize)]
+struct RoomTokenResponse {
+    token: String,
 }
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -30,25 +43,7 @@ impl AuthClient {
     /// 本番は HTTPS 必須。`http` は localhost 系ホストのみ許可する
     /// （login-register-ui-plan.md 2.2）。
     pub fn new(base_url: &str) -> Result<Self, AuthError> {
-        let url = reqwest::Url::parse(base_url)
-            .map_err(|e| AuthError::InvalidBaseUrl(format!("{base_url}: {e}")))?;
-
-        match url.scheme() {
-            "https" => {}
-            "http" => {
-                let host = url.host_str().unwrap_or("");
-                if !is_localhost(host) {
-                    return Err(AuthError::InvalidBaseUrl(format!(
-                        "http is only allowed for localhost, got {base_url}"
-                    )));
-                }
-            }
-            other => {
-                return Err(AuthError::InvalidBaseUrl(format!(
-                    "unsupported scheme {other} in {base_url}"
-                )));
-            }
-        }
+        let base_url = normalize_base_url(base_url)?;
 
         let http = reqwest::blocking::Client::builder()
             .timeout(REQUEST_TIMEOUT)
@@ -122,6 +117,35 @@ impl AuthClient {
         }
     }
 
+    /// world-server の `POST /api/room_token`。
+    ///
+    /// access token は HTTP の Bearer にだけ載せる。戻り値の RoomToken を
+    /// Zenoh の封筒に載せる。
+    pub fn issue_room_token(
+        &self,
+        engine_base_url: &str,
+        access_token: &str,
+        room_id: &str,
+    ) -> Result<String, AuthError> {
+        let engine = normalize_base_url(engine_base_url)?;
+        let response = self
+            .http
+            .post(format!("{engine}/api/room_token"))
+            .bearer_auth(access_token)
+            .json(&serde_json::json!({ "room_id": room_id }))
+            .send()
+            .map_err(|e| connect_error("world-server", e))?;
+        let body: RoomTokenResponse = parse_json_response(response)?;
+        if body.token.is_empty() {
+            Err(AuthError::Server {
+                status: 200,
+                detail: "empty room token".to_string(),
+            })
+        } else {
+            Ok(body.token)
+        }
+    }
+
     /// `GET /api/v1/auth/me`
     pub fn me(&self, access_token: &str) -> Result<UserInfo, AuthError> {
         let response = self
@@ -184,15 +208,43 @@ impl AuthClient {
     }
 }
 
+fn normalize_base_url(base_url: &str) -> Result<String, AuthError> {
+    let url = reqwest::Url::parse(base_url)
+        .map_err(|e| AuthError::InvalidBaseUrl(format!("{base_url}: {e}")))?;
+
+    match url.scheme() {
+        "https" => {}
+        "http" => {
+            let host = url.host_str().unwrap_or("");
+            if !is_localhost(host) {
+                return Err(AuthError::InvalidBaseUrl(format!(
+                    "http is only allowed for localhost, got {base_url}"
+                )));
+            }
+        }
+        other => {
+            return Err(AuthError::InvalidBaseUrl(format!(
+                "unsupported scheme {other} in {base_url}"
+            )));
+        }
+    }
+
+    Ok(base_url.trim_end_matches('/').to_string())
+}
+
 fn is_localhost(host: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1")
 }
 
 fn network_error(e: reqwest::Error) -> AuthError {
+    connect_error("auth service", e)
+}
+
+fn connect_error(service: &str, e: reqwest::Error) -> AuthError {
     if e.is_timeout() {
-        AuthError::Network("request timed out".to_string())
+        AuthError::Network(format!("{service} request timed out"))
     } else if e.is_connect() {
-        AuthError::Network("could not connect to auth service".to_string())
+        AuthError::Network(format!("could not connect to {service}"))
     } else {
         AuthError::Network(e.to_string())
     }
